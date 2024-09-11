@@ -4,7 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -64,7 +64,7 @@ func admissionReviewFromRequest(r *http.Request, deserializer runtime.Decoder) (
 	// content for the request.
 	var body []byte
 	if r.Body != nil {
-		requestData, err := ioutil.ReadAll(r.Body)
+		requestData, err := io.ReadAll(r.Body)
 		if err != nil {
 			return nil, err
 		}
@@ -80,7 +80,7 @@ func admissionReviewFromRequest(r *http.Request, deserializer runtime.Decoder) (
 	return admissionReviewRequest, nil
 }
 
-func mutatePod(w http.ResponseWriter, r *http.Request) {
+func mutateService(w http.ResponseWriter, r *http.Request) {
 	logger.Printf("received message on mutate")
 
 	deserializer := codecs.UniversalDeserializer()
@@ -95,39 +95,40 @@ func mutatePod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Do server-side validation that we are only dealing with a pod resource. This
+	// Do server-side validation that we are only dealing with a service resource. This
 	// should also be part of the MutatingWebhookConfiguration in the cluster, but
 	// we should verify here before continuing.
-	podResource := metav1.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
-	if admissionReviewRequest.Request.Resource != podResource {
-		msg := fmt.Sprintf("did not receive pod, got %s", admissionReviewRequest.Request.Resource.Resource)
+	serviceResource := metav1.GroupVersionResource{Group: "", Version: "v1", Resource: "services"}
+	if admissionReviewRequest.Request.Resource != serviceResource {
+		msg := fmt.Sprintf("did not receive service, got %s", admissionReviewRequest.Request.Resource.Resource)
 		logger.Printf(msg)
 		w.WriteHeader(400)
 		w.Write([]byte(msg))
 		return
 	}
 
-	// Decode the pod from the AdmissionReview.
+	// Decode the service from the AdmissionReview.
 	rawRequest := admissionReviewRequest.Request.Object.Raw
-	pod := corev1.Pod{}
-	if _, _, err := deserializer.Decode(rawRequest, nil, &pod); err != nil {
-		msg := fmt.Sprintf("error decoding raw pod: %v", err)
+	service := corev1.Service{}
+	if _, _, err := deserializer.Decode(rawRequest, nil, &service); err != nil {
+		msg := fmt.Sprintf("error decoding raw service: %v", err)
 		logger.Printf(msg)
 		w.WriteHeader(500)
 		w.Write([]byte(msg))
 		return
 	}
 
-	// Create a response that will add a label to the pod if it does
+	// Create a response that will add a label to the service if it does
 	// not already have a label with the key of "hello". In this case
 	// it does not matter what the value is, as long as the key exists.
 	admissionResponse := &admissionv1.AdmissionResponse{}
 	var patch string
 	patchType := v1.PatchTypeJSONPatch
-	if _, ok := pod.Labels["hello"]; !ok {
-		patch = `[{"op":"add","path":"/metadata/labels","value":{"hello":"world"}}]`
+	if loadBalancerClass, ok := service.Labels["serviceMutator"]; ok && service.Spec.Type == corev1.ServiceTypeLoadBalancer {
+		patch = fmt.Sprintf(`[{"op":"add","path":"/spec/loadBalancerClass","value": "%s"}]`, loadBalancerClass)
 	}
 
+	logger.Printf("patch: %v", patch)
 	admissionResponse.Allowed = true
 	if patch != "" {
 		admissionResponse.PatchType = &patchType
@@ -154,17 +155,18 @@ func mutatePod(w http.ResponseWriter, r *http.Request) {
 }
 
 func runWebhookServer(certFile, keyFile string) {
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		panic(err)
-	}
-
 	fmt.Println("Starting webhook server")
-	http.HandleFunc("/mutate", mutatePod)
+	http.HandleFunc("/mutate", mutateService)
 	server := http.Server{
 		Addr: fmt.Sprintf(":%d", port),
 		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{cert},
+			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+				cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+				if err != nil {
+					return nil, err
+				}
+				return &cert, nil
+			},
 		},
 		ErrorLog: logger,
 	}

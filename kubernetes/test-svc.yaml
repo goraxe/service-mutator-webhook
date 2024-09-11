@@ -1,0 +1,14 @@
+kind: Service
+apiVersion: v1
+metadata:
+  name: test-app
+  labels:
+    hello: universe
+    serviceMutator: "foo"
+spec:
+  type: LoadBalancer
+  selector:
+    app: mutating-webhook
+  ports:
+    - port: 443
+      targetPort: 443

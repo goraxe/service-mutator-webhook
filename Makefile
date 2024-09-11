@@ -4,12 +4,12 @@ build:
 	go build -o ./bin
 
 .PHONY: build-image-kind
-build-image-kind:
-	docker build -t localhost:5000/mutating-webhook:latest .
+build-image-kind: build
+	docker build --no-cache -t localhost:5000/mutating-webhook:latest .
 
 .PHONY: push-kind
-push-kind:
-	docker push localhost:5000/mutating-webhook:latest
+push-kind: build-image-kind
+	kind load docker-image localhost:5000/mutating-webhook:latest
 
 .PHONY: deploy
 deploy:
@@ -23,3 +23,11 @@ cleanup:
 	kubectl delete -f ./kubernetes/webhook-service.yaml
 	kubectl delete -f ./kubernetes/mutating-webhook-config.yaml
 	kubectl delete -f ./kubernetes/test-pod.yaml
+
+cert-manager:
+	helm install \
+  cert-manager jetstack/cert-manager \
+  --namespace cert-manager \
+  --create-namespace \
+  --version v1.10.1 \
+   --set installCRDs=true

@@ -15,7 +15,7 @@ spec:
       containers:
         - name: mutating-webhook
           image: localhost:5000/mutating-webhook:latest
-          imagePullPolicy: Always
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 443
           volumeMounts:
